@@ -44,7 +44,7 @@ from vllm.v1.engine.async_llm import AsyncLLM
 
 class IndexTTS2:
     def __init__(
-        self, model_dir="checkpoints", is_fp16=False, device=None, use_cuda_kernel=None, gpu_memory_utilization=0.25, qwenemo_gpu_memory_utilization=0.10
+        self, model_dir="checkpoints", is_fp16=False, device=None, use_cuda_kernel=None, gpu_memory_utilization=0.25
     ):
         """
         Args:
@@ -91,10 +91,7 @@ class IndexTTS2:
         )
         indextts_vllm = AsyncLLM.from_engine_args(engine_args)
 
-        self.qwen_emo = QwenEmotion(
-            os.path.join(self.model_dir, self.cfg.qwen_emo_path),
-            gpu_memory_utilization=qwenemo_gpu_memory_utilization,
-        )
+        self.qwen_emo = None  # QwenEmotion disabled — emo_control_method=3 not available
 
         self.gpt = UnifiedVoice(indextts_vllm, **self.cfg.gpt)
         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
@@ -247,15 +244,10 @@ class IndexTTS2:
         start_time = time.perf_counter()
 
         if use_emo_text:
-            emo_audio_prompt = None
-            emo_alpha = 1.0
-            # assert emo_audio_prompt is None
-            # assert emo_alpha == 1.0
-            if emo_text is None:
-                emo_text = text
-            emo_dict, content = await self.qwen_emo.inference(emo_text)
-            # logger.info(emo_dict)
-            emo_vector = list(emo_dict.values())
+            raise ValueError(
+                "emo_control_method=3 (text emotion) is disabled. "
+                "QwenEmotion model is not loaded. Use methods 0, 1, or 2."
+            )
 
         if emo_vector is not None:
             emo_audio_prompt = None

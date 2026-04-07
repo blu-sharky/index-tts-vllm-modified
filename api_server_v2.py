@@ -1,11 +1,14 @@
 import os
 import asyncio
 import io
+import tempfile
 import traceback
 from fastapi import FastAPI, Request, Response, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import urlparse
+import aiohttp
 import uvicorn
 import argparse
 import json
@@ -27,7 +30,6 @@ async def lifespan(app: FastAPI):
         model_dir=args.model_dir,
         is_fp16=args.is_fp16,
         gpu_memory_utilization=args.gpu_memory_utilization,
-        qwenemo_gpu_memory_utilization=args.qwenemo_gpu_memory_utilization,
     )
     yield
 
@@ -54,7 +56,7 @@ async def health_check():
                 "message": "TTS model not initialized"
             }
         )
-    
+
     return JSONResponse(
         status_code=200,
         content={
@@ -65,11 +67,31 @@ async def health_check():
     )
 
 
+def _is_url(path: str) -> bool:
+    return path.startswith("http://") or path.startswith("https://")
+
+
+async def _download_to_temp(url: str) -> str:
+    """Download a URL to a temporary file, return its path."""
+    parsed = urlparse(url)
+    suffix = os.path.splitext(parsed.path)[1] or ".wav"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            try:
+                tmp.write(await resp.read())
+            finally:
+                tmp.close()
+            return tmp.name
+
+
 @app.post("/tts_url", responses={
     200: {"content": {"application/octet-stream": {}}},
     500: {"content": {"application/json": {}}}
 })
 async def tts_api_url(request: Request):
+    temp_files = []
     try:
         data = await request.json()
         emo_control_method = data.get("emo_control_method", 0)
@@ -82,9 +104,26 @@ async def tts_api_url(request: Request):
         emo_random = data.get("emo_random", False)
         max_text_tokens_per_sentence = data.get("max_text_tokens_per_sentence", 120)
 
+        # Download remote files if URLs are provided
+        if _is_url(spk_audio_path):
+            spk_audio_path = await _download_to_temp(spk_audio_path)
+            temp_files.append(spk_audio_path)
+        if emo_ref_path and _is_url(emo_ref_path):
+            emo_ref_path = await _download_to_temp(emo_ref_path)
+            temp_files.append(emo_ref_path)
+
         global tts
         if type(emo_control_method) is not int:
             emo_control_method = emo_control_method.value
+        if emo_control_method == 3:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "emo_control_method=3 (text emotion) is not supported. "
+                             "QwenEmotion model is disabled. Use methods 0, 1, or 2."
+                }
+            )
         if emo_control_method == 0:
             emo_ref_path = None
             emo_weight = 1.0
@@ -104,20 +143,19 @@ async def tts_api_url(request: Request):
         else:
             vec = None
 
-        # logger.info(f"Emo control mode:{emo_control_method}, vec:{vec}")
         sr, wav = await tts.infer(spk_audio_prompt=spk_audio_path, text=text,
                         output_path=None,
                         emo_audio_prompt=emo_ref_path, emo_alpha=emo_weight,
                         emo_vector=vec,
                         use_emo_text=(emo_control_method==3), emo_text=emo_text,use_random=emo_random,
                         max_text_tokens_per_sentence=int(max_text_tokens_per_sentence))
-        
+
         with io.BytesIO() as wav_buffer:
             sf.write(wav_buffer, wav, sr, format='WAV')
             wav_bytes = wav_buffer.getvalue()
 
         return Response(content=wav_bytes, media_type="audio/wav")
-    
+
     except Exception as ex:
         tb_str = ''.join(traceback.format_exception(type(ex), ex, ex.__traceback__))
         return JSONResponse(
@@ -127,6 +165,12 @@ async def tts_api_url(request: Request):
                 "error": str(tb_str)
             }
         )
+    finally:
+        for f in temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
@@ -136,7 +180,6 @@ if __name__ == "__main__":
     parser.add_argument("--model_dir", type=str, default="checkpoints/IndexTTS-2-vLLM", help="Model checkpoints directory")
     parser.add_argument("--is_fp16", action="store_true", default=False, help="Fp16 infer")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.25)
-    parser.add_argument("--qwenemo_gpu_memory_utilization", type=float, default=0.10)
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
     args = parser.parse_args()
     
