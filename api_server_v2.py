@@ -173,7 +173,73 @@ async def tts_api_url(request: Request):
                 pass
 
 
-if __name__ == "__main__":
+@app.post("/tts", responses={
+    200: {"content": {"application/octet-stream": {}}},
+    500: {"content": {"application/json": {}}}
+})
+async def tts_api_multipart(
+    text: str = Form(...),
+    spk_audio: UploadFile = File(...),
+    emo_control_method: int = Form(0),
+    emo_weight: float = Form(1.0),
+):
+    """multipart/form-data 上传参考音频合成语音（供无共享文件系统的客户端使用）。"""
+    temp_files = []
+    try:
+        suffix = os.path.splitext(spk_audio.filename)[1] or ".wav"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            tmp.write(await spk_audio.read())
+        finally:
+            tmp.close()
+        spk_audio_path = tmp.name
+        temp_files.append(spk_audio_path)
+
+        if emo_control_method == 3:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "error": "emo_control_method=3 (text emotion) is not supported. "
+                             "QwenEmotion model is disabled. Use methods 0, 1, or 2."
+                }
+            )
+
+        global tts
+        vec = None
+        if emo_control_method == 0:
+            emo_weight = 1.0
+
+        sr, wav = await tts.infer(
+            spk_audio_prompt=spk_audio_path, text=text,
+            output_path=None,
+            emo_audio_prompt=None, emo_alpha=emo_weight,
+            emo_vector=vec,
+            use_emo_text=False, emo_text=None, use_random=False,
+            max_text_tokens_per_sentence=120,
+        )
+
+        with io.BytesIO() as wav_buffer:
+            sf.write(wav_buffer, wav, sr, format='WAV')
+            wav_bytes = wav_buffer.getvalue()
+
+        return Response(content=wav_bytes, media_type="audio/wav")
+
+    except Exception as ex:
+        tb_str = ''.join(traceback.format_exception(type(ex), ex, ex.__traceback__))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(tb_str)}
+        )
+    finally:
+        for f in temp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+
+
     # 从 backend/config.json 读取 TTS 配置作为默认值
     def _load_config_defaults() -> dict:
         here = os.path.dirname(os.path.abspath(__file__))
