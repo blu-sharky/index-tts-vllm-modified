@@ -29,8 +29,14 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["indextts*"]
 
-
+[tool.uv]
 override-dependencies = [
     "protobuf>=5.29.6,!=6.30.*,!=6.31.*,!=6.32.*,!=6.33.0.*,!=6.33.1.*,!=6.33.2.*,!=6.33.3.*,!=6.33.4.*",
-    "descript-audiotools==0.7.2",
 ]
+
+# Override descript-audiotools metadata to remove its protobuf<3.20 constraint,
+# which conflicts with vllm's protobuf requirement.
+[[tool.uv.dependency-metadata]]
+name = "descript-audiotools"
+version = "0.7.2"
+requires-dist = []
