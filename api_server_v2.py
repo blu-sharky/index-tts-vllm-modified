@@ -174,14 +174,36 @@ async def tts_api_url(request: Request):
 
 
 if __name__ == "__main__":
+    # 从 backend/config.json 读取 TTS 配置作为默认值
+    def _load_config_defaults() -> dict:
+        here = os.path.dirname(os.path.abspath(__file__))
+        for _ in range(6):
+            candidate = os.path.join(here, "config.json")
+            if os.path.exists(candidate):
+                import json
+                with open(candidate, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                yt = raw.get("youtube", {})
+                return {
+                    "model_dir": yt.get("tts_model_dir", "checkpoints/IndexTTS-2-vLLM"),
+                    "gpu_memory_utilization": float(yt.get("tts_gpu_mem", 0.25)),
+                    "port": int(yt.get("tts_port", 6006)),
+                }
+            here = os.path.dirname(here)
+        return {}
+
+    _cfg = _load_config_defaults()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=6006)
-    parser.add_argument("--model_dir", type=str, default="checkpoints/IndexTTS-2-vLLM", help="Model checkpoints directory")
+    parser.add_argument("--port", type=int, default=_cfg.get("port", 6006))
+    parser.add_argument("--model_dir", type=str, default=_cfg.get("model_dir", "checkpoints/IndexTTS-2-vLLM"), help="Model checkpoints directory")
     parser.add_argument("--is_fp16", action="store_true", default=False, help="Fp16 infer")
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.25)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=_cfg.get("gpu_memory_utilization", 0.25))
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
     args = parser.parse_args()
+
+    logger.info(f">> Config: model_dir={args.model_dir}, port={args.port}, gpu_mem={args.gpu_memory_utilization}")
     
     if not os.path.exists("outputs"):
         os.makedirs("outputs")
